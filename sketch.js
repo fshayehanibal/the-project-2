@@ -29,6 +29,10 @@ let radarSize = 180;
 let lastSpawn = 0;
 let spawnInterval = 120;
 let levelText = '';
+let nextLevelText = '';
+let continueButton;
+let pendingLevelChange = null;
+let bossSpawned = false;
 let canvasWidth = 1000;
 let canvasHeight = 650;
 
@@ -82,8 +86,9 @@ function resetGame() {
   bosses = [];
   bullets = [];
   bossActive = false;
+  bossSpawned = false;
   spawnInterval = 120;
-  levelText = 'Level 1: Catch 20 fish or defeat 20 pirates';
+  levelText = 'Level 1: Catch 20 fish AND defeat 15 pirates';
   while (world.bodies.length > walls.length + 1) {
     let body = world.bodies[world.bodies.length - 1];
     World.remove(world, body);
@@ -99,6 +104,11 @@ function touchStarted() {
       startSound.play().catch(err => console.log('Sound play failed:', err));
     }
   }
+
+  if (gameState === 'levelComplete' && continueButton && mouseX >= continueButton.x && mouseX <= continueButton.x + continueButton.w && mouseY >= continueButton.y && mouseY <= continueButton.y + continueButton.h) {
+    continueToNextLevel();
+  }
+
   return false;
 }
 
@@ -120,6 +130,11 @@ function draw() {
 
   if (gameState === 'victory') {
     drawVictory();
+    return;
+  }
+
+  if (gameState === 'levelComplete') {
+    drawLevelComplete();
     return;
   }
 
@@ -155,6 +170,28 @@ function drawGameOver() {
   text('Game Over', width / 2, height / 2 - 30);
   textSize(24);
   text('Refresh to play again.', width / 2, height / 2 + 20);
+}
+
+function drawLevelComplete() {
+  fill(255);
+  textAlign(CENTER, CENTER);
+  textSize(48);
+  text('Level Complete!', width / 2, height / 2 - 80);
+  textSize(24);
+  text(nextLevelText, width / 2, height / 2 - 30);
+
+  continueButton = {
+    x: width / 2 - 130,
+    y: height / 2 + 20,
+    w: 260,
+    h: 60,
+  };
+
+  fill(4, 132, 255);
+  rect(continueButton.x, continueButton.y, continueButton.w, continueButton.h, 12);
+  fill(255);
+  textSize(28);
+  text('Continue', width / 2, continueButton.y + continueButton.h / 2);
 }
 
 function drawVictory() {
@@ -223,6 +260,12 @@ function fireBullet() {
   World.add(world, bullet);
   ammo -= 1;
   player.lastShot = frameCount;
+  // play shooting sound if available
+  let s = document.getElementById('shootSound');
+  if (s) {
+    s.currentTime = 0;
+    s.play().catch(err => console.log('Shoot sound failed:', err));
+  }
 }
 
 function spawnEntities() {
@@ -367,14 +410,24 @@ function drawPirate(pirate) {
 }
 
 function updateBosses() {
-  if (!bossActive && level >= 3) {
-    bossActive = true;
+  if (level >= 3 && bosses.length === 0) {
     spawnBosses();
   }
   for (let i = bosses.length - 1; i >= 0; i--) {
     let boss = bosses[i];
     let direction = Matter.Vector.normalise({ x: player.position.x - boss.position.x, y: player.position.y - boss.position.y });
-    Body.applyForce(boss, boss.position, { x: direction.x * 0.0002, y: direction.y * 0.0002 });
+    // boss.speed controls movement force; default stronger than regular pirates
+    let speedFactor = boss.speed || 0.0008;
+    Body.applyForce(boss, boss.position, { x: direction.x * speedFactor, y: direction.y * speedFactor });
+
+    // boss shooting: fire triple shots with a spread
+    if (!boss.shootTimer) boss.shootTimer = 0;
+    if (!boss.shootInterval) boss.shootInterval = 120;
+    if (frameCount > boss.shootTimer) {
+      bossShoot(boss);
+      boss.shootTimer = frameCount + boss.shootInterval;
+    }
+
     drawBoss(boss);
     if (boss.position.x < -200 || boss.position.x > width + 200 || boss.position.y < -200 || boss.position.y > height + 200) {
       World.remove(world, boss);
@@ -384,23 +437,33 @@ function updateBosses() {
 }
 
 function spawnBosses() {
+  bossActive = true;
+  bossSpawned = true;
+  bosses = [];
   if (level === 3) {
     let boss = Bodies.circle(width / 2, 80, 40, { label: 'bossPirate', frictionAir: 0.01, restitution: 0.8 });
     boss.hp = 25;
+    boss.speed = 0.0012; // faster movement
+    boss.shootInterval = 90; // faster shooting rhythm
     bosses.push(boss);
     World.add(world, boss);
     levelText = 'Boss 1: Hit the pirate 25 times';
   } else if (level === 4) {
     let boss = Bodies.circle(width / 2, 80, 42, { label: 'bossPirate2', frictionAir: 0.01, restitution: 0.8 });
     boss.hp = 25;
+    boss.speed = 0.0010;
+    boss.shootInterval = 100;
     bosses.push(boss);
     let bossFish = Bodies.circle(width / 2, height - 80, 42, { label: 'bossFish', frictionAir: 0.01, restitution: 0.8 });
     bossFish.hp = 25;
+    bossFish.speed = 0.0009;
+    bossFish.shootInterval = 140;
     bosses.push(bossFish);
     World.add(world, boss);
     World.add(world, bossFish);
     levelText = 'Boss 2: Defeat the pirate and giant fish';
   }
+  bossSpawned = true;
 }
 
 function drawBoss(boss) {
@@ -420,7 +483,43 @@ function drawBoss(boss) {
     fill(0);
     ellipse(13, -8, 5, 5);
   }
+  // draw health bar above boss
+  noStroke();
+  let barW = boss.circleRadius * 2.4;
+  let barH = 8;
+  let hp = boss.hp || 0;
+  let maxHp = 25;
+  let pct = constrain(hp / maxHp, 0, 1);
+  push();
+  translate(0, -boss.circleRadius - 18);
+  fill(80);
+  rectMode(CENTER);
+  rect(0, 0, barW, barH, 4);
+  fill(200, 40, 40);
+  rectMode(CORNER);
+  let filledW = (barW - 4) * pct; // small padding
+  rect(-barW / 2 + 2, -barH / 2 + 2, filledW, barH - 4, 3);
   pop();
+  pop();
+}
+
+// Boss shooting helper: fires 3 bullets in a spread towards player
+function bossShoot(boss) {
+  if (!boss || !player) return;
+  // don't spam if boss already dead
+  if (boss.hp <= 0) return;
+  let baseDir = Matter.Vector.normalise({ x: player.position.x - boss.position.x, y: player.position.y - boss.position.y });
+  let angle = Math.atan2(baseDir.y, baseDir.x);
+  let spread = 0.35; // radians between bullets
+  let angles = [angle - spread, angle, angle + spread];
+  for (let a of angles) {
+    let bx = boss.position.x + Math.cos(a) * (boss.circleRadius + 10);
+    let by = boss.position.y + Math.sin(a) * (boss.circleRadius + 10);
+    let bullet = Bodies.circle(bx, by, 6, { label: 'pirateBullet', restitution: 0.8, frictionAir: 0.01 });
+    Body.setVelocity(bullet, { x: Math.cos(a) * 9, y: Math.sin(a) * 9 });
+    bullets.push(bullet);
+    World.add(world, bullet);
+  }
 }
 
 function updateBullets() {
@@ -449,17 +548,10 @@ function detectFishingNet() {
     let fish = fishes[i];
     let d = dist(player.position.x, player.position.y, fish.position.x, fish.position.y);
     if (d < player.catchRadius) {
-      if (level === 1) {
-        fishCount += 1;
-        fishThisLevel += 1;
-        World.remove(world, fish);
-        fishes.splice(i, 1);
-      } else if (fish.hp <= 0) {
-        fishCount += 1;
-        fishThisLevel += 1;
-        World.remove(world, fish);
-        fishes.splice(i, 1);
-      }
+      fishCount += 1;
+      fishThisLevel += 1;
+      World.remove(world, fish);
+      fishes.splice(i, 1);
     }
   }
 }
@@ -558,12 +650,16 @@ function damageBoss(boss, bullet) {
   if (boss.hp <= 0) {
     World.remove(world, boss);
     bosses = bosses.filter((b) => b !== boss);
-    if (boss.label === 'bossPirate' && level === 3) {
+    if (level === 3 && boss.label === 'bossPirate' && bosses.length === 0) {
+      // immediately advance to level 4 and spawn final bosses
       level = 4;
+      fishThisLevel = 0;
+      piratesThisLevel = 0;
+      ammo = maxAmmo;
+      player.health = playerHealth;
       bossActive = false;
-      levelText = 'Boss 2 incoming: defeat the pirate and giant fish';
-    } else if (level === 4 && bosses.length === 0) {
-      gameState = 'victory';
+      levelText = 'Level 4: Final Boss! Defeat the Big Pirate AND Big Fish!';
+      spawnBosses();
     }
   }
 }
@@ -580,33 +676,76 @@ function destroyBullet(bullet) {
   bullets = bullets.filter((b) => b !== bullet);
 }
 
-function checkLevelProgress() {
-  // For levels 1 and 2: require `levelTarget` kills or catches in that level
-  if ((level === 1 || level === 2) && (fishThisLevel >= levelTarget || piratesThisLevel >= levelTarget)) {
-    // advance to next level
-    level += 1;
+function continueToNextLevel() {
+  if (!pendingLevelChange) return;
+  const nextLevel = pendingLevelChange.targetLevel;
+
+  fishCount = 0;
+  pirateCount = 0;
+  player.score = 0;
+
+  if (nextLevel === 2) {
+    level = 2;
     fishThisLevel = 0;
     piratesThisLevel = 0;
     ammo = maxAmmo;
-    if (level === 2) {
-      levelText = 'Level 2: Fish can attack, defeat 20 pirates or catch 20 fish';
-      spawnInterval = 90;
-    } else if (level === 3) {
-      levelText = 'Boss 1 incoming: pirate boss';
-      bossActive = false;
-      spawnBosses();
-    }
-  }
-
-  // If boss level 3 cleared, spawn boss level 4
-  if (level === 3 && bosses.length === 0 && !bossActive) {
-    // boss was cleared by damageBoss handler which sets level, but just in case
-    bossActive = true;
+    player.health = playerHealth;
+    spawnInterval = 90;
+    levelText = 'Level 2: Fish can attack! Catch 25 fish AND defeat 20 pirates';
+  } else if (nextLevel === 3) {
+    level = 3;
+    fishThisLevel = 0;
+    piratesThisLevel = 0;
+    ammo = maxAmmo;
+    player.health = playerHealth;
+    bossActive = false;
+    bossSpawned = false;
+    levelText = 'Level 3: Boss incoming - Defeat the Big Pirate!';
+    spawnBosses();
+  } else if (nextLevel === 4) {
+    level = 4;
+    fishThisLevel = 0;
+    piratesThisLevel = 0;
+    ammo = maxAmmo;
+    player.health = playerHealth;
+    bossActive = false;
+    levelText = 'Level 4: Final Boss! Defeat the Big Pirate AND Big Fish!';
     spawnBosses();
   }
 
+  pendingLevelChange = null;
+  gameState = 'play';
+}
+
+function checkLevelProgress() {
+  if (gameState !== 'play') return;
+
+  // Level 1 completion
+  if (level === 1 && fishThisLevel >= 20 && piratesThisLevel >= 15) {
+    pendingLevelChange = {
+      targetLevel: 2,
+      message: 'Level 1 complete! Continue to Level 2',
+    };
+    nextLevelText = 'Level complete! Tap to continue to Level 2';
+    gameState = 'levelComplete';
+    return;
+  }
+
+  // Level 2 completion -> immediately go to level 3 and spawn boss
+  if (level === 2 && fishThisLevel >= 25 && piratesThisLevel >= 20) {
+    level = 3;
+    fishThisLevel = 0;
+    piratesThisLevel = 0;
+    ammo = maxAmmo;
+    player.health = playerHealth;
+    bossActive = false;
+    levelText = 'Level 3: Boss incoming - Defeat the Big Pirate!';
+    spawnBosses();
+    return;
+  }
+
   // Victory when level 4 bosses cleared
-  if (level === 4 && bosses.length === 0 && bossActive) {
+  if (level === 4 && bosses.length === 0) {
     gameState = 'victory';
   }
 }
