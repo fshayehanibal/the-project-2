@@ -93,6 +93,11 @@ function resetGame() {
 function touchStarted() {
   if (gameState === 'intro' && mouseX >= startButton.x && mouseX <= startButton.x + startButton.w && mouseY >= startButton.y && mouseY <= startButton.y + startButton.h) {
     gameState = 'play';
+    let startSound = document.getElementById('startSound');
+    if (startSound) {
+      startSound.currentTime = 0;
+      startSound.play().catch(err => console.log('Sound play failed:', err));
+    }
   }
   return false;
 }
