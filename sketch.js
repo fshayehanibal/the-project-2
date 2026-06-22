@@ -71,7 +71,7 @@ function setupPlayer() {
   player.killPoints = 0;
   player.catchPoints = 0;
   player.catchRadius = 80;
-  player.netRadius = 110;
+  player.netRadius = 150;
   player.lastShot = 0;
   World.add(world, player);
 }
@@ -581,22 +581,34 @@ function drawBoss(boss) {
   pop();
 }
 
-// Boss shooting helper: fires 3 bullets in a spread towards player
+// Boss shooting helper: fires 3 bullets in a spread towards player (or 1 bullet for level 3)
 function bossShoot(boss) {
   if (!boss || !player) return;
   // don't spam if boss already dead
   if (boss.hp <= 0) return;
   let baseDir = Matter.Vector.normalise({ x: player.position.x - boss.position.x, y: player.position.y - boss.position.y });
   let angle = Math.atan2(baseDir.y, baseDir.x);
-  let spread = 0.35; // radians between bullets
-  let angles = [angle - spread, angle, angle + spread];
-  for (let a of angles) {
-    let bx = boss.position.x + Math.cos(a) * (boss.circleRadius + 10);
-    let by = boss.position.y + Math.sin(a) * (boss.circleRadius + 10);
+  
+  // Level 3 boss fires single bullet at normal speed like small pirates
+  if (level === 3) {
+    let bx = boss.position.x + Math.cos(angle) * (boss.circleRadius + 10);
+    let by = boss.position.y + Math.sin(angle) * (boss.circleRadius + 10);
     let bullet = Bodies.circle(bx, by, 6, { label: 'pirateBullet', restitution: 0.8, frictionAir: 0.01 });
-    Body.setVelocity(bullet, { x: Math.cos(a) * 9, y: Math.sin(a) * 9 });
+    Body.setVelocity(bullet, { x: Math.cos(angle) * 9, y: Math.sin(angle) * 9 });
     bullets.push(bullet);
     World.add(world, bullet);
+  } else {
+    // Level 4+ bosses fire triple spread
+    let spread = 0.35; // radians between bullets
+    let angles = [angle - spread, angle, angle + spread];
+    for (let a of angles) {
+      let bx = boss.position.x + Math.cos(a) * (boss.circleRadius + 10);
+      let by = boss.position.y + Math.sin(a) * (boss.circleRadius + 10);
+      let bullet = Bodies.circle(bx, by, 6, { label: 'pirateBullet', restitution: 0.8, frictionAir: 0.01 });
+      Body.setVelocity(bullet, { x: Math.cos(a) * 9, y: Math.sin(a) * 9 });
+      bullets.push(bullet);
+      World.add(world, bullet);
+    }
   }
 }
 
